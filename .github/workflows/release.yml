@@ -1,0 +1,46 @@
+name: Build and publish WordPress plugin
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'wpr-static/**'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wpr-static-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate PHP and JavaScript
+        run: |
+          set -euo pipefail
+          find wpr-static -type f -name '*.php' -print0 | xargs -0 -n1 php -l
+          find wpr-static -type f -name '*.js' -print0 | xargs -0 -n1 node --check
+          test -f wpr-static/includes/wpr-updates-client.php
+      - name: Build release ZIP and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=$(sed -nE 's/^[[:space:]]*\*?[[:space:]]*Version:[[:space:]]*([0-9]+\.[0-9]+\.[0-9]+)[[:space:]]*$/\1/p' wpr-static/wpr-static.php)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          tag="v$version"
+          asset="wpr-static-$tag.zip"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists; refusing to overwrite it."
+            exit 0
+          fi
+          git archive --format=zip --output="$asset" HEAD wpr-static
+          unzip -t "$asset"
+          unzip -p "$asset" wpr-static/wpr-static.php | grep -F "Version: $version"
+          sha256sum "$asset"
+          gh release create "$tag" "$asset" --target "$GITHUB_SHA" --title "WPR Static $version" --notes-file RELEASE-NOTES.md
